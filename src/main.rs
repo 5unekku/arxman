@@ -12,9 +12,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     if args.extract {
-        let mode = if args.bare { extract::WrapperMode::Bare }
-            else if args.subfolder { extract::WrapperMode::Sub }
-            else { extract::WrapperMode::Auto };
+        let mode = if args.bare { extract::WrapperMode::Bare } else { extract::WrapperMode::Sub };
         extract::run(&args.files, args.format.as_deref(), mode)?;
     } else if args.compress {
         if args.files.len() < 2 {

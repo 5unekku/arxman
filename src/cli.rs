@@ -20,13 +20,9 @@ pub struct Args {
     #[arg(short = 'l', value_name = "LEVEL")]
     pub level: Option<u32>,
 
-    /// always extract bare (no wrapper subfolder)
-    #[arg(short = 'b', conflicts_with_all = ["compress", "subfolder"])]
+    /// extract bare — no wrapper subfolder, contents land directly in dest
+    #[arg(short = 'b', conflicts_with = "compress")]
     pub bare: bool,
-
-    /// always wrap in a subfolder named after the archive
-    #[arg(short = 's', conflicts_with_all = ["compress", "bare"])]
-    pub subfolder: bool,
 
     /// files/archives and optional destination or output path
     #[arg(trailing_var_arg = true)]

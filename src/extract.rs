@@ -9,9 +9,8 @@ use crate::format::{archive_stem, Format};
 
 #[derive(Clone, Copy)]
 pub enum WrapperMode {
-    Auto,   // bare if single top-level item, subfolder if multiple
-    Bare,   // always extract contents directly into dest
-    Sub,    // always wrap in a subfolder named after the archive
+    Sub,    // default: wrap in a subfolder named after the archive (extensions stripped)
+    Bare,   // -b: extract contents directly into dest
 }
 
 pub fn run(files: &[PathBuf], format_override: Option<&str>, mode: WrapperMode) -> Result<()> {
@@ -101,11 +100,7 @@ fn smart_extract(raw: impl FnOnce(&Path) -> Result<()>, archive: &Path, dest: &P
         return Ok(());
     }
 
-    let use_wrapper = match mode {
-        WrapperMode::Bare => false,
-        WrapperMode::Sub  => true,
-        WrapperMode::Auto => top.len() > 1,
-    };
+    let use_wrapper = !matches!(mode, WrapperMode::Bare);
 
     if use_wrapper {
         let wrapper = dest.join(archive_stem(archive));
@@ -146,11 +141,7 @@ fn extract_zip(path: &Path, dest: &Path, mode: WrapperMode) -> Result<()> {
         if !top.is_empty() { tops.insert(top); }
     }
 
-    let use_wrapper = match mode {
-        WrapperMode::Bare => false,
-        WrapperMode::Sub  => true,
-        WrapperMode::Auto => tops.len() > 1,
-    };
+    let use_wrapper = !matches!(mode, WrapperMode::Bare);
 
     let extract_dest = if use_wrapper {
         let d = dest.join(archive_stem(path));
