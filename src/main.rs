@@ -12,7 +12,10 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     if args.extract {
-        extract::run(&args.files, args.format.as_deref())?;
+        let mode = if args.bare { extract::WrapperMode::Bare }
+            else if args.subfolder { extract::WrapperMode::Sub }
+            else { extract::WrapperMode::Auto };
+        extract::run(&args.files, args.format.as_deref(), mode)?;
     } else if args.compress {
         if args.files.len() < 2 {
             bail!("compress mode requires at least one input and an output file");
