@@ -13,7 +13,6 @@ pub enum Format {
     Bz2,
     Xz,
     Zst,
-    Zlib,
     SevenZip,
     Rar,
 }
@@ -35,7 +34,6 @@ impl Format {
             "bz2" | "bzip2" => Some(Self::Bz2),
             "xz" => Some(Self::Xz),
             "zst" | "zstd" => Some(Self::Zst),
-            "z" | "zlib" => Some(Self::Zlib),
             "7z" => Some(Self::SevenZip),
             "rar" => Some(Self::Rar),
             _ => None,
@@ -55,15 +53,26 @@ impl Format {
             "bz2" | "bzip2" => Some(Self::Bz2),
             "xz" => Some(Self::Xz),
             "zst" | "zstd" => Some(Self::Zst),
-            "z" | "zlib" => Some(Self::Zlib),
             "7z" | "sevenz" => Some(Self::SevenZip),
             "rar" => Some(Self::Rar),
             _ => None,
         }
     }
 
+    /// true only for formats that are actual archives (not bare compression streams)
     pub fn can_compress(&self) -> bool {
-        !matches!(self, Self::Rar)
+        matches!(self, Self::Zip | Self::Jar | Self::Tar | Self::TarGz | Self::TarBz2 | Self::TarXz | Self::TarZst | Self::SevenZip)
+    }
+
+    /// human-readable suggestion for bare codec formats
+    pub fn tar_equivalent(&self) -> Option<&'static str> {
+        match self {
+            Self::Gz => Some("tar.gz"),
+            Self::Bz2 => Some("tar.bz2"),
+            Self::Xz => Some("tar.xz"),
+            Self::Zst => Some("tar.zst"),
+            _ => None,
+        }
     }
 }
 

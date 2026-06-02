@@ -16,13 +16,20 @@ pub fn run(inputs: &[PathBuf], output: &Path, format_override: Option<&str>, lev
     } else {
         Format::from_extension(output).ok_or_else(|| {
             anyhow::anyhow!(
-                "cannot infer format from output name '{}'; use -f to specify",
+                "cannot infer format from '{}'; use -f to specify",
                 output.display()
             )
         })?
     };
 
     if !fmt.can_compress() {
+        if let Some(suggestion) = fmt.tar_equivalent() {
+            bail!(
+                "{} is a compression codec, not an archive format; use .{} instead",
+                output.display(),
+                suggestion
+            );
+        }
         bail!("compression to {} is not supported", output.display());
     }
 
@@ -41,19 +48,13 @@ pub fn run(inputs: &[PathBuf], output: &Path, format_override: Option<&str>, lev
         Format::TarBz2 => compress_tar_bz2(inputs, output, level),
         Format::TarXz => compress_tar_xz(inputs, output, level),
         Format::TarZst => compress_tar_zst(inputs, output, level),
-        Format::Gz => compress_gz(inputs, output, level),
-        Format::Bz2 => compress_bz2(inputs, output, level),
-        Format::Xz => compress_xz(inputs, output, level),
-        Format::Zst => compress_zst(inputs, output, level),
-        Format::Zlib => compress_zlib(inputs, output, level),
         Format::SevenZip => compress_7z(inputs, output),
-        Format::Rar => unreachable!(),
+        _ => unreachable!(),
     }
 }
 
 // --- file gathering ---
 
-/// walk inputs and return (source_path, archive_path) pairs
 fn gather(inputs: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>> {
     let mut pairs = Vec::new();
     for input in inputs {
@@ -91,11 +92,10 @@ fn compress_zip(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result
     Ok(())
 }
 
-// --- tar (no compression) ---
+// --- tar ---
 
 fn compress_tar(inputs: &[PathBuf], output: &Path) -> Result<()> {
-    let file = File::create(output)?;
-    let mut builder = tar::Builder::new(file);
+    let mut builder = tar::Builder::new(File::create(output)?);
     append_all(&mut builder, inputs)?;
     builder.finish()?;
     Ok(())
@@ -116,8 +116,7 @@ fn append_all<W: Write>(builder: &mut tar::Builder<W>, inputs: &[PathBuf]) -> Re
 
 fn compress_tar_gz(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result<()> {
     let lv = clamp(level, 0, 9, 6);
-    let file = File::create(output)?;
-    let enc = flate2::write::GzEncoder::new(file, flate2::Compression::new(lv));
+    let enc = flate2::write::GzEncoder::new(File::create(output)?, flate2::Compression::new(lv));
     let mut builder = tar::Builder::new(enc);
     append_all(&mut builder, inputs)?;
     builder.finish()?;
@@ -129,8 +128,7 @@ fn compress_tar_gz(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Res
 
 fn compress_tar_bz2(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result<()> {
     let lv = clamp(level, 1, 9, 6);
-    let file = File::create(output)?;
-    let enc = bzip2::write::BzEncoder::new(file, bzip2::Compression::new(lv));
+    let enc = bzip2::write::BzEncoder::new(File::create(output)?, bzip2::Compression::new(lv));
     let mut builder = tar::Builder::new(enc);
     append_all(&mut builder, inputs)?;
     builder.finish()?;
@@ -142,8 +140,7 @@ fn compress_tar_bz2(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Re
 
 fn compress_tar_xz(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result<()> {
     let lv = clamp(level, 0, 9, 6);
-    let file = File::create(output)?;
-    let enc = xz2::write::XzEncoder::new(file, lv);
+    let enc = xz2::write::XzEncoder::new(File::create(output)?, lv);
     let mut builder = tar::Builder::new(enc);
     append_all(&mut builder, inputs)?;
     builder.finish()?;
@@ -155,8 +152,7 @@ fn compress_tar_xz(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Res
 
 fn compress_tar_zst(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result<()> {
     let lv = clamp(level, 1, 22, 3) as i32;
-    let file = File::create(output)?;
-    let enc = zstd::Encoder::new(file, lv)?;
+    let enc = zstd::Encoder::new(File::create(output)?, lv)?;
     let mut builder = tar::Builder::new(enc);
     append_all(&mut builder, inputs)?;
     builder.finish()?;
@@ -164,61 +160,7 @@ fn compress_tar_zst(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Re
     Ok(())
 }
 
-// --- single-stream formats (only make sense for a single input file) ---
-
-fn single_input(inputs: &[PathBuf]) -> Result<&Path> {
-    if inputs.len() != 1 || inputs[0].is_dir() {
-        bail!("single-stream formats (.gz, .bz2, .xz, .zst, .zlib) require exactly one file input");
-    }
-    Ok(&inputs[0])
-}
-
-fn compress_gz(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result<()> {
-    let lv = clamp(level, 0, 9, 6);
-    let src = single_input(inputs)?;
-    let mut enc = flate2::write::GzEncoder::new(File::create(output)?, flate2::Compression::new(lv));
-    io::copy(&mut File::open(src)?, &mut enc)?;
-    enc.finish()?;
-    Ok(())
-}
-
-fn compress_bz2(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result<()> {
-    let lv = clamp(level, 1, 9, 6);
-    let src = single_input(inputs)?;
-    let mut enc = bzip2::write::BzEncoder::new(File::create(output)?, bzip2::Compression::new(lv));
-    io::copy(&mut File::open(src)?, &mut enc)?;
-    enc.finish()?;
-    Ok(())
-}
-
-fn compress_xz(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result<()> {
-    let lv = clamp(level, 0, 9, 6);
-    let src = single_input(inputs)?;
-    let mut enc = xz2::write::XzEncoder::new(File::create(output)?, lv);
-    io::copy(&mut File::open(src)?, &mut enc)?;
-    enc.finish()?;
-    Ok(())
-}
-
-fn compress_zst(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result<()> {
-    let lv = clamp(level, 1, 22, 3) as i32;
-    let src = single_input(inputs)?;
-    let mut enc = zstd::Encoder::new(File::create(output)?, lv)?;
-    io::copy(&mut File::open(src)?, &mut enc)?;
-    enc.finish()?;
-    Ok(())
-}
-
-fn compress_zlib(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result<()> {
-    let lv = clamp(level, 0, 9, 6);
-    let src = single_input(inputs)?;
-    let mut enc = flate2::write::ZlibEncoder::new(File::create(output)?, flate2::Compression::new(lv));
-    io::copy(&mut File::open(src)?, &mut enc)?;
-    enc.finish()?;
-    Ok(())
-}
-
-// --- 7z (system command) ---
+// --- 7z ---
 
 fn compress_7z(inputs: &[PathBuf], output: &Path) -> Result<()> {
     let cmd = if which("7z") { "7z" } else if which("7za") { "7za" } else {

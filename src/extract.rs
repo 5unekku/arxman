@@ -68,7 +68,6 @@ pub fn extract_archive(path: &Path, dest: &Path, format_override: Option<&str>) 
         Format::Bz2 => extract_bz2(path, dest),
         Format::Xz => extract_xz(path, dest),
         Format::Zst => extract_zst(path, dest),
-        Format::Zlib => extract_zlib(path, dest),
         Format::SevenZip => extract_7z(path, dest),
         Format::Rar => extract_rar(path, dest),
     }
@@ -256,15 +255,6 @@ fn extract_zst(path: &Path, dest: &Path) -> Result<()> {
     let out = single_stream_out(path, dest);
     let file = File::open(path)?;
     let mut dec = zstd::Decoder::new(file)?;
-    io::copy(&mut dec, &mut File::create(&out)?)?;
-    println!("  -> {}", out.display());
-    Ok(())
-}
-
-fn extract_zlib(path: &Path, dest: &Path) -> Result<()> {
-    let out = single_stream_out(path, dest);
-    let file = File::open(path)?;
-    let mut dec = flate2::read::ZlibDecoder::new(file);
     io::copy(&mut dec, &mut File::create(&out)?)?;
     println!("  -> {}", out.display());
     Ok(())

@@ -54,10 +54,6 @@ pub fn magic_from_bytes(buf: &[u8]) -> Option<Format> {
     if buf.len() >= 262 && &buf[257..262] == b"ustar" {
         return Some(Format::Tar);
     }
-    // zlib deflate wrappers (CM=8, CINFO values)
-    if buf.len() >= 2 && buf[0] == 0x78 && matches!(buf[1], 0x01 | 0x5e | 0x9c | 0xda) {
-        return Some(Format::Zlib);
-    }
     None
 }
 
