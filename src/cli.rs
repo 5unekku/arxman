@@ -1,4 +1,5 @@
 use clap::Parser;
+use clap_complete::Shell;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -23,6 +24,10 @@ pub struct Args {
     /// extract bare — no wrapper subfolder, contents land directly in dest
     #[arg(short = 'b', conflicts_with = "compress")]
     pub bare: bool,
+
+    /// print shell completions and exit
+    #[arg(long, value_name = "SHELL", exclusive = true)]
+    pub completions: Option<Shell>,
 
     /// files/archives and optional destination or output path
     #[arg(trailing_var_arg = true)]

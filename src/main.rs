@@ -5,11 +5,16 @@ mod extract;
 mod format;
 
 use anyhow::bail;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::Args;
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    if let Some(shell) = args.completions {
+        clap_complete::generate(shell, &mut Args::command(), "arx", &mut std::io::stdout());
+        return Ok(());
+    }
 
     if args.extract {
         let mode = if args.bare { extract::WrapperMode::Bare } else { extract::WrapperMode::Sub };
