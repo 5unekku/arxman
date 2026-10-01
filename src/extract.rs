@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -71,8 +70,8 @@ pub fn extract_archive(path: &Path, dest: &Path, format_override: Option<&str>, 
         Format::Bz2 => extract_bz2(path, dest, mode),
         Format::Xz  => extract_xz(path, dest, mode),
         Format::Zst => extract_zst(path, dest, mode),
-        Format::SevenZip => extract_7z(path, dest),
-        Format::Rar     => extract_rar(path, dest),
+        Format::SevenZip => smart_extract(|d| extract_7z(path, d), path, dest, mode),
+        Format::Rar     => smart_extract(|d| extract_rar(path, d), path, dest, mode),
     }
 }
 
@@ -105,7 +104,13 @@ fn smart_extract(raw: impl FnOnce(&Path) -> Result<()>, archive: &Path, dest: &P
     if use_wrapper {
         let wrapper = dest.join(archive_stem(archive));
         if wrapper.exists() {
-            fs::remove_dir_all(&wrapper)?;
+            // merge into the existing folder rather than deleting it
+            for entry in top {
+                move_into(entry.path(), wrapper.join(entry.file_name()))?;
+            }
+            fs::remove_dir_all(&tmp).ok();
+            println!("  -> {}/", wrapper.display());
+            return Ok(());
         }
         fs::rename(&tmp, &wrapper)?;
         println!("  -> {}/", wrapper.display());
@@ -120,27 +125,34 @@ fn smart_extract(raw: impl FnOnce(&Path) -> Result<()>, archive: &Path, dest: &P
 }
 
 fn move_into(src: PathBuf, dest: PathBuf) -> Result<()> {
-    if dest.exists() {
-        if dest.is_dir() { fs::remove_dir_all(&dest)?; } else { fs::remove_file(&dest)?; }
-    }
-    fs::rename(&src, &dest)?;
+    merge_move(&src, &dest)?;
     println!("  -> {}", dest.display());
+    Ok(())
+}
+
+/// move src to dest; directories merge, files overwrite (never deletes unrelated content)
+fn merge_move(src: &Path, dest: &Path) -> Result<()> {
+    let src_is_dir = src.symlink_metadata()?.is_dir();
+    match dest.symlink_metadata() {
+        Ok(meta) if meta.is_dir() && src_is_dir => {
+            for entry in fs::read_dir(src)? {
+                let entry = entry?;
+                merge_move(&entry.path(), &dest.join(entry.file_name()))?;
+            }
+            fs::remove_dir(src)?;
+        }
+        Ok(meta) => {
+            if meta.is_dir() { fs::remove_dir_all(dest)?; } else { fs::remove_file(dest)?; }
+            fs::rename(src, dest)?;
+        }
+        Err(_) => fs::rename(src, dest)?,
+    }
     Ok(())
 }
 
 // --- zip / jar ---
 
 fn extract_zip(path: &Path, dest: &Path, mode: WrapperMode) -> Result<()> {
-    let file = File::open(path)?;
-    let mut archive = zip::ZipArchive::new(file)?;
-
-    let mut tops = HashSet::new();
-    for i in 0..archive.len() {
-        let entry = archive.by_index_raw(i)?;
-        let top = entry.name().split('/').next().unwrap_or("").to_string();
-        if !top.is_empty() { tops.insert(top); }
-    }
-
     let use_wrapper = !matches!(mode, WrapperMode::Bare);
 
     let extract_dest = if use_wrapper {
@@ -249,7 +261,6 @@ fn single_stream_out(path: &Path, dest: &Path) -> PathBuf {
 fn extract_7z(path: &Path, dest: &Path) -> Result<()> {
     sevenz_rust::decompress_file(path, dest)
         .with_context(|| format!("7z extraction failed for {}", path.display()))?;
-    println!("  -> {}", dest.display());
     Ok(())
 }
 

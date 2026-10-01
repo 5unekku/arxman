@@ -55,7 +55,8 @@ pub fn run(inputs: &[PathBuf], output: &Path, format_override: Option<&str>, lev
 
 // --- file gathering ---
 
-fn gather(inputs: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>> {
+fn gather(inputs: &[PathBuf], output: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
+    let out_canon = output.canonicalize().ok();
     let mut pairs = Vec::new();
     for input in inputs {
         let canonical = input.canonicalize()
@@ -64,7 +65,8 @@ fn gather(inputs: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>> {
         for entry in WalkDir::new(&canonical).sort_by_file_name() {
             let entry = entry?;
             let arc = entry.path().strip_prefix(parent)?.to_path_buf();
-            if arc == PathBuf::from("") { continue; }
+            if arc.as_os_str().is_empty() { continue; }
+            if Some(entry.path()) == out_canon.as_deref() { continue; }
             pairs.push((entry.path().to_path_buf(), arc));
         }
     }
@@ -76,11 +78,15 @@ fn gather(inputs: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>> {
 fn compress_zip(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result<()> {
     let file = File::create(output)?;
     let mut zip = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default()
+    let base = zip::write::SimpleFileOptions::default()
         .compression_level(level.map(|l| l as i64));
 
-    for (src, arc) in gather(inputs)? {
-        let arc_str = arc.to_string_lossy();
+    for (src, arc) in gather(inputs, output)? {
+        let arc_str = arc.to_string_lossy().replace('\\', "/");
+        let options = match fs::metadata(&src) {
+            Ok(m) => base.unix_permissions(unix_mode(&m)),
+            Err(_) => base,
+        };
         if src.is_dir() {
             zip.add_directory(arc_str, options)?;
         } else {
@@ -96,13 +102,13 @@ fn compress_zip(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Result
 
 fn compress_tar(inputs: &[PathBuf], output: &Path) -> Result<()> {
     let mut builder = tar::Builder::new(File::create(output)?);
-    append_all(&mut builder, inputs)?;
+    append_all(&mut builder, inputs, output)?;
     builder.finish()?;
     Ok(())
 }
 
-fn append_all<W: Write>(builder: &mut tar::Builder<W>, inputs: &[PathBuf]) -> Result<()> {
-    for (src, arc) in gather(inputs)? {
+fn append_all<W: Write>(builder: &mut tar::Builder<W>, inputs: &[PathBuf], output: &Path) -> Result<()> {
+    for (src, arc) in gather(inputs, output)? {
         if src.is_dir() {
             builder.append_dir(&arc, &src)?;
         } else {
@@ -118,7 +124,7 @@ fn compress_tar_gz(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Res
     let lv = clamp(level, 0, 9, 6);
     let enc = flate2::write::GzEncoder::new(File::create(output)?, flate2::Compression::new(lv));
     let mut builder = tar::Builder::new(enc);
-    append_all(&mut builder, inputs)?;
+    append_all(&mut builder, inputs, output)?;
     builder.finish()?;
     builder.into_inner()?.finish()?;
     Ok(())
@@ -130,7 +136,7 @@ fn compress_tar_bz2(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Re
     let lv = clamp(level, 1, 9, 6);
     let enc = bzip2::write::BzEncoder::new(File::create(output)?, bzip2::Compression::new(lv));
     let mut builder = tar::Builder::new(enc);
-    append_all(&mut builder, inputs)?;
+    append_all(&mut builder, inputs, output)?;
     builder.finish()?;
     builder.into_inner()?.finish()?;
     Ok(())
@@ -142,7 +148,7 @@ fn compress_tar_xz(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Res
     let lv = clamp(level, 0, 9, 6);
     let enc = xz2::write::XzEncoder::new(File::create(output)?, lv);
     let mut builder = tar::Builder::new(enc);
-    append_all(&mut builder, inputs)?;
+    append_all(&mut builder, inputs, output)?;
     builder.finish()?;
     builder.into_inner()?.finish()?;
     Ok(())
@@ -154,7 +160,7 @@ fn compress_tar_zst(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Re
     let lv = clamp(level, 1, 22, 3) as i32;
     let enc = zstd::Encoder::new(File::create(output)?, lv)?;
     let mut builder = tar::Builder::new(enc);
-    append_all(&mut builder, inputs)?;
+    append_all(&mut builder, inputs, output)?;
     builder.finish()?;
     builder.into_inner()?.finish()?;
     Ok(())
@@ -163,26 +169,32 @@ fn compress_tar_zst(inputs: &[PathBuf], output: &Path, level: Option<u32>) -> Re
 // --- 7z ---
 
 fn compress_7z(inputs: &[PathBuf], output: &Path) -> Result<()> {
-    let cmd = if which("7z") { "7z" } else if which("7za") { "7za" } else {
-        bail!("7z compression requires 7z or 7za to be installed");
-    };
-    let mut args = vec!["a".to_string(), output.to_string_lossy().to_string()];
-    args.extend(inputs.iter().map(|p| p.to_string_lossy().to_string()));
-    let status = std::process::Command::new(cmd).args(&args).status()?;
-    if !status.success() {
-        bail!("7z command failed");
+    let mut writer = sevenz_rust::SevenZWriter::create(output)
+        .with_context(|| format!("creating {}", output.display()))?;
+    for (src, arc) in gather(inputs, output)? {
+        let name = arc.to_string_lossy().replace('\\', "/");
+        let entry = sevenz_rust::SevenZArchiveEntry::from_path(&src, name);
+        if src.is_dir() {
+            writer.push_archive_entry::<&[u8]>(entry, None)?;
+        } else {
+            writer.push_archive_entry(entry, Some(File::open(&src)?))?;
+        }
     }
+    writer.finish()?;
     Ok(())
-}
-
-fn which(cmd: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 fn clamp(level: Option<u32>, min: u32, max: u32, default: u32) -> u32 {
     level.unwrap_or(default).clamp(min, max)
+}
+
+#[cfg(unix)]
+fn unix_mode(m: &fs::Metadata) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    m.permissions().mode() & 0o7777
+}
+
+#[cfg(not(unix))]
+fn unix_mode(m: &fs::Metadata) -> u32 {
+    if m.is_dir() { 0o755 } else { 0o644 }
 }
