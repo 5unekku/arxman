@@ -173,7 +173,12 @@ fn compress_7z(inputs: &[PathBuf], output: &Path) -> Result<()> {
         .with_context(|| format!("creating {}", output.display()))?;
     for (src, arc) in gather(inputs, output)? {
         let name = arc.to_string_lossy().replace('\\', "/");
-        let entry = sevenz_rust::SevenZArchiveEntry::from_path(&src, name);
+        let mut entry = sevenz_rust::SevenZArchiveEntry::from_path(&src, name);
+        if let Ok(m) = fs::metadata(&src) {
+            // 7-Zip convention: unix mode in the high 16 bits, flagged by 0x8000
+            entry.has_windows_attributes = true;
+            entry.windows_attributes = (unix_mode(&m) << 16) | 0x8000 | (entry.windows_attributes & 0x7fff);
+        }
         if src.is_dir() {
             writer.push_archive_entry::<&[u8]>(entry, None)?;
         } else {

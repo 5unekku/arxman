@@ -259,7 +259,18 @@ fn single_stream_out(path: &Path, dest: &Path) -> PathBuf {
 // --- 7z ---
 
 fn extract_7z(path: &Path, dest: &Path) -> Result<()> {
-    sevenz_rust::decompress_file(path, dest)
+    sevenz_rust::decompress_file_with_extract_fn(path, dest, |entry, reader, out| {
+        let done = sevenz_rust::default_entry_extract_fn(entry, reader, out)?;
+        #[cfg(unix)]
+        {
+            let attrs = entry.windows_attributes();
+            if entry.has_windows_attributes && attrs & 0x8000 != 0 {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(out, fs::Permissions::from_mode((attrs >> 16) & 0o7777)).ok();
+            }
+        }
+        Ok(done)
+    })
         .with_context(|| format!("7z extraction failed for {}", path.display()))?;
     Ok(())
 }
